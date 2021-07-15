@@ -1,6 +1,8 @@
 import {
+	DEFAULT_MEDIA_TYPE,
 	getJSDoc,
 	getKindValue,
+	getResponseTypeFromMediaType,
 	getSafePropertyName,
 	getTypeName,
 	getURL,
@@ -38,12 +40,12 @@ import {
 } from '../../common/data/serialized-path-parameter';
 import { concatIf } from '../../../../utils/array';
 import { when } from '../../../../utils/string';
-import { serializeRequestBodyObject } from './request-body-object';
+import { getRequestMedia, serializeRequestBodyObject } from './request-body-object';
 import { ResolveRefContext, fromString, getRelativePath, Ref } from '../../../../utils/ref';
 import { OperationObject } from '../../../../schema/3.0/operation-object';
 import { ParameterObject, ParameterObjectCodec } from '../../../../schema/3.0/parameter-object';
 import { RequestBodyObjectCodec } from '../../../../schema/3.0/request-body-object';
-import { chain, isSome, none, Option, some, map, fromEither, fold } from 'fp-ts/lib/Option';
+import { chain, isSome, none, Option, some, map, fromEither, getOrElse, fold } from 'fp-ts/lib/Option';
 import { constFalse } from 'fp-ts/lib/function';
 import { clientRef } from '../../common/bundled/client';
 import { Kind } from '../../../../utils/types';
@@ -58,13 +60,14 @@ import {
 	SerializedFragment,
 } from '../../common/data/serialized-fragment';
 import { SchemaObjectCodec } from '../../../../schema/3.0/schema-object';
-import { lookup, keys } from 'fp-ts/lib/Record';
+import { lookup } from 'fp-ts/lib/Record';
 import { ResponseObjectCodec } from '../../../../schema/3.0/response-object';
 import {
 	fromSerializedHeaderParameter,
 	getSerializedHeaderParameterType,
 	SerializedHeaderParameter,
 } from '../../common/data/serialized-header-parameters';
+import { getResponseMedia } from './response-object';
 
 const getOperationName = (pattern: string, operation: OperationObject, method: HTTPMethod): string =>
 	pipe(
@@ -286,7 +289,7 @@ export const serializeOperationObject = combineReader(
 		);
 
 		const serializedResponses = serializeResponsesObject(from)(operation.responses);
-		const responseType: XHRResponseType = pipe(
+		const mediaType: string = pipe(
 			SUCCESSFUL_CODES,
 			array.findFirstMap(code => lookup(code, operation.responses)),
 			chain(response =>
@@ -295,20 +298,30 @@ export const serializeOperationObject = combineReader(
 					: some(response),
 			),
 			chain(response => response.content),
-			map(keys),
+			chain(getResponseMedia),
+			map(({ key }) => key),
+			getOrElse(() => DEFAULT_MEDIA_TYPE),
+		);
+		const responseType: XHRResponseType = getResponseTypeFromMediaType(mediaType);
+		const serializedContentType = pipe(
+			operation.requestBody,
+			chain(requestBody =>
+				ReferenceObjectCodec.is(requestBody)
+					? fromEither(e.resolveRef(requestBody.$ref, RequestBodyObjectCodec))
+					: some(requestBody),
+			),
+			map(request => request.content),
+			chain(getRequestMedia),
+			map(({ key }) => key),
 			fold(
-				() => 'json',
-				types => {
-					if (types.includes('application/octet-stream')) {
-						return 'blob';
-					}
-					if (types.includes('text/plain')) {
-						return 'text';
-					}
-					return 'json';
-				},
+				() => '',
+				contentType => `'Content-type': '${contentType}',`,
 			),
 		);
+		const requestHeaders = `{
+			Accept: '${mediaType}',
+			${serializedContentType}
+		}`;
 
 		return combineEither(
 			parameters,
@@ -376,6 +389,7 @@ export const serializeOperationObject = combineReader(
 						${bodyIO}
 						${queryIO}
 						${headersIO}
+						const requestHeaders = ${requestHeaders}
 
 						return e.httpClient.chain(
 							e.httpClient.request({
@@ -384,7 +398,7 @@ export const serializeOperationObject = combineReader(
 								responseType: '${responseType}',
 								${when(hasQueryParameters, 'query,')}
 								${when(hasBodyParameter, 'body,')}
-								${when(hasHeaderParameters, 'headers')}
+								headers: {${hasHeaderParameters ? '...headers,' : ''} ...requestHeaders}
 							}),
 							value =>
 								pipe(

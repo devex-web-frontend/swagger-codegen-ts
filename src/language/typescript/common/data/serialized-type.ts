@@ -68,6 +68,16 @@ export const SERIALIZED_UNKNOWN_TYPE = serializedType(
 	[serializedDependency('unknown', 'io-ts')],
 	[],
 );
+export const getSerializedBlobType = (from: Ref): Either<Error, SerializedType> => {
+	return combineEither(utilsRef, utilsRef =>
+		serializedType(
+			'Blob',
+			'BlobToBlobIO',
+			[serializedDependency('BlobToBlobIO', getRelativePath(from, utilsRef))],
+			[],
+		),
+	);
+};
 export const SERIALIZED_BOOLEAN_TYPE = serializedType(
 	'boolean',
 	'boolean',
@@ -109,8 +119,32 @@ export const getSerializedStringType = (from: Ref, format: Option<string>): Eith
 							),
 						);
 					}
+					case 'byte':
+					case 'base64': {
+						return some(
+							serializedType(
+								'Base64',
+								'Base64FromStringIO',
+								[
+									serializedDependency('Base64FromStringIO', getRelativePath(from, utilsRef)),
+									serializedDependency('Base64', getRelativePath(from, utilsRef)),
+								],
+								[],
+							),
+						);
+					}
 					case 'binary': {
-						return some(SERIALIZED_UNKNOWN_TYPE);
+						return some(
+							serializedType(
+								'Binary',
+								'BinaryFromStringIO',
+								[
+									serializedDependency('BinaryFromStringIO', getRelativePath(from, utilsRef)),
+									serializedDependency('Binary', getRelativePath(from, utilsRef)),
+								],
+								[],
+							),
+						);
 					}
 				}
 				return none;
